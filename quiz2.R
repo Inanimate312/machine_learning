@@ -1,3 +1,18 @@
+#1 
+library(AppliedPredictiveModeling); library(caret)
+data(AlzheimerDisease)
+
+adData = data.frame(diagnosis,predictors)
+trainIndex = createDataPartition(diagnosis, p = 0.50,list=FALSE)
+training = adData[trainIndex,]
+testing = adData[-trainIndex,]
+
+training
+
+
+## 2 
+# There is a non-random pattern in the plot of the outcome versus index that does not appear to be perfectly explained by any predictor suggesting a variable may be missing.
+
 library(AppliedPredictiveModeling)
 data(concrete)
 library(caret)
@@ -5,6 +20,15 @@ set.seed(1000)
 inTrain = createDataPartition(mixtures$CompressiveStrength, p = 3/4)[[1]]
 training = mixtures[ inTrain,]
 testing = mixtures[-inTrain,]
+
+## 3
+# There are values of zero so when you take the log() transform those values will be -Inf.
+
+## 4 
+# 9
+
+## 5 
+# Not: non-PCA=0.65, PCA=0.72
 
 library(Hmisc)
 library(ggplot2)
@@ -57,8 +81,10 @@ testing = adData[-inTrain,]
 
 il_vars <- grep("^IL", names(training), value=TRUE)
 
-pp <- preProcess(training[, il_vars], method="pca", thresh=0.9)
+pp <- preProcess(training[, il_vars], method="pca", thresh=0.8)
 pp$numComp
+
+rm(list = ls())
 
 library(caret)
 library(AppliedPredictiveModeling)
@@ -69,40 +95,49 @@ inTrain = createDataPartition(adData$diagnosis, p = 3/4)[[1]]
 training = adData[ inTrain,]
 testing = adData[-inTrain,]
 
-trainingIL <- training[,grep("^IL|diagnosis", names(training))]
-testingIL <- testing[,grep("^IL|diagnosis", names(testing))]
+# extract new training and testing sets
+IL_col_idx <- grep("^[Ii][Ll].*", names(training))
+suppressMessages(library(dplyr))
+new_training <- training[, c(names(training)[IL_col_idx], "diagnosis")]
+names(new_training)
 
-# non-PCA
-model <- train(diagnosis ~., data = trainingIL, method = "glm")
-predict_model <- predict(model, newdata=testingIL)
-matrix_model <- confusionMatrix(predict_model,testingIL$diagnosis)
-matrix_model$overall[1]
+IL_col_idx <- grep("^[Ii][Ll].*", names(testing))
+suppressMessages(library(dplyr))
+new_testing <- testing[, c(names(testing)[IL_col_idx], "diagnosis")]
+names(new_testing)
 
-# PCA
-modelPCA <- train(diagnosis ~., data = trainingIL, method = "glm", preProcess = "pca", trControl = trainControl(preProcOptions=list(thresh=0.8)))
-matrix_modelPCA <- confusionMatrix(testingIL$diagnosis, predict(modelPCA, testingIL))
-matrix_modelPCA$overall[1]
+# compute the model with non_pca predictors
+non_pca_model <- train(diagnosis ~ ., data=new_training, method="glm")
+# apply the non pca model on the testing set and check the accuracy
+non_pca_result <- confusionMatrix(new_testing[, 13], predict(non_pca_model, new_testing[, -13]))
+non_pca_result
+# 0.7561
 
+# perform PCA extraction on the new training and testing sets
+pc_training_obj <- preProcess(new_training[, -13], method=c('center', 'scale', 'pca'), thresh=0.8)
+pc_training_preds <- predict(pc_training_obj, new_training[, -13])
+pc_testing_preds <- predict(pc_training_obj, new_testing[, -13])
 
+# ADD diagnosis back in
+pc_training <- data.frame(diagnosis = new_training$diagnosis, pc_training_preds)
+pc_testing  <- data.frame(diagnosis = new_testing$diagnosis,  pc_testing_preds)
 
-####
+# Now train the PCA model
+pca_model <- train(diagnosis ~ ., data = pc_training, method = "glm")
 
+# apply the PCA model on the testing set
+pca_result <- confusionMatrix(new_testing[, 13], predict(pca_model, pc_testing_preds))
+pca_result
+# 0.7195
 
-trainingIL<-training[, c(grep("^IL", names(training)), 1)]
-testingIL<-testing[, c(grep("^IL", names(testing)), 1)]
+# But answer is not: 
+# Non-PCA=0.75
+# PCA=0.71
 
-# Model that uses all the predictors as they are 
-mdfit1<-train(diagnosis~., method="glm", data=trainingIL)
-confusionMatrix(testing$diagnosis, predict(mdfit1, testing))
+# The answer is not:
+# Non-PCA=0.72
+# PCA=0.65
 
-# Model that uses PCA explaining 80% of variance
-preProc<-preProcess(trainingIL[, -13], method="pca", thresh = 0.8)
-trainPC<-predict(preProc, trainingIL[, -13])
-mdfit2<-train(x=trainPC, y=trainingIL$diagnosis, method="glm")
-
-testPC<-predict(preProc, testingIL[, -13])
-confusionMatrix(testingIL$diagnosis, predict(mdfit2, testPC))
-
-# The below method for the PCA model yields similar results 
-#mdfit2<-train(diagnosis~., method="glm", preProcess="pca", data=trainingIL)
-#confusionMatrix(testingIL$diagnosis, predict(mdfit2, testingIL))
+# The answer is not:
+# Non-PCA=0.72
+# PCA=0.71
