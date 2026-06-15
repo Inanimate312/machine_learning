@@ -1,72 +1,106 @@
-## Reproducible setup
-set.seed(12345)
+# Initialize
+set.seed(54321)
 library(caret)
 library(randomForest)
 
-## 1. Download and read data into working directory
-train_url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
-test_url  <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+# Download and read in data
+training_url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testing_url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
 
-download.file(train_url, destfile = "pml-training.csv", mode = "wb")
-download.file(test_url,  destfile = "pml-testing.csv",  mode = "wb")
+download.file(training_url, 
+              destfile = "pml-training.csv", 
+              mode = "wb")
 
-train_raw <- read.csv("pml-training.csv", na.strings = c("NA", "", "#DIV/0!"))
-test_raw  <- read.csv("pml-testing.csv",  na.strings = c("NA", "", "#DIV/0!"))
+download.file(testing_url, 
+              destfile = "pml-testing.csv", 
+              mode = "wb")
 
-## 2. Basic cleaning: remove non‑predictive columns and columns with too many NAs
-# Remove first few ID/time/name columns
-drop_cols <- c("X", "user_name", "raw_timestamp_part_1", "raw_timestamp_part_2",
-               "cvtd_timestamp", "new_window", "num_window")
-train <- train_raw[, !(names(train_raw) %in% drop_cols)]
-test  <- test_raw[,  !(names(test_raw)  %in% drop_cols)]
+training_raw <- read.csv("pml-training.csv", 
+                         na.strings = c("NA","","#DIV/0!"))
 
-# Remove columns with almost all NAs
-na_frac <- colSums(is.na(train)) / nrow(train)
-keep    <- na_frac < 0.95
-train   <- train[, keep]
-test    <- test[,  keep[names(test)]]
+testing_raw <- read.csv("pml-testing.csv", 
+                        na.strings = c("NA","","#DIV/0!"))
 
-# Ensure outcome is factor
-train$classe <- factor(train$classe)
+# Remove non-predictive columns
+drop_columns <- c("X",
+                  "user_name",
+                  "raw_timestamp_part_1",
+                  "raw_timestamp_part_2",
+                  "cvtd_timestamp",
+                  "new_window",
+                  "num_window")
 
-## 3. Create training/validation split for out‑of‑sample error estimate
-set.seed(12345)
-inTrain <- createDataPartition(train$classe, p = 0.7, list = FALSE)
-train_set <- train[inTrain, ]
-valid_set <- train[-inTrain, ]
+training <- training_raw[, !(names(training_raw) %in% drop_columns)]
+testing <- testing_raw[, !(names(testing_raw) %in% drop_columns)]
 
-## 4. Cross‑validated model training (Random Forest)
-ctrl <- trainControl(method = "cv", number = 5, verboseIter = FALSE)
 
-set.seed(12345)
-rf_fit <- train(classe ~ .,
-                data = train_set,
+# Remove columns with mostly NA values
+na_fraction <- colSums(is.na(training)) / nrow(training)
+keep_names <- names(training)[na_fraction < 0.95]
+keep_names <- intersect(keep_names, names(testing))
+
+training <- training[, keep_names]
+testing <- testing[, keep_names]
+
+# Restore the outcome variable "classe" to the training set
+training$classe <- factor(training_raw$classe)
+
+# Split training into training and validation (to estimate OOS error)
+set.seed(54321)
+inTraining <- createDataPartition(training$classe, p = 0.7, list = FALSE)
+
+training_set <- training[inTraining, ]
+validation_set <- training[-inTraining, ]
+
+# Build cross-validated random forest model
+control <- trainControl(method = "cv", number = 5)
+
+set.seed(54321)
+rf_fit <- train(classe ~., 
+                data = training_set, 
                 method = "rf",
-                trControl = ctrl,
+                trControl = control,
                 ntree = 500,
                 importance = TRUE)
 
-rf_fit
-
-## 5. Evaluate on validation set (estimated out‑of‑sample error)
-valid_pred <- predict(rf_fit, newdata = valid_set)
-cm <- confusionMatrix(valid_pred, valid_set$classe)
-cm
+# Evaluate on validation set
+validation_predictions <- predict(rf_fit, newdata = validation_set)
+cm <- confusionMatrix(validation_predictions, validation_set$classe)
 oos_error <- 1 - cm$overall["Accuracy"]
-oos_error
+oos_error # 0.0076
 
-## 6. Refit on full training data (optional but typical for final model)
-set.seed(12345)
-rf_final <- train(classe ~ .,
-                  data = train,
+# Refit on the full training data
+set.seed(54321)
+rf_final <- train(classe ~.,
+                  data = training,
                   method = "rf",
-                  trControl = ctrl,
+                  trControl = control,
                   ntree = 500,
                   importance = TRUE)
 
-## 7. Predict on the 20 test cases
-test_pred <- predict(rf_final, newdata = test)
-test_pred
+# Predict on test data
+test_predictions <- predict(rf_final, newdata = testing)
+test_predictions
 
-## If you need them as a character vector:
-as.character(test_pred
+# Visualizations
+
+## Variable importance plot
+plot(varImp(rf_fit), top = 20, main = "Top 20 Important Predictors")
+
+## Confusion Matrix heatmap
+library(ggplot2)
+
+cm_df <- as.data.frame(cm$table)
+ggplot(cm_df, aes(Prediction, Reference, fill = Freq)) +
+  geom_tile() +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  ggtitle("Confusion Matrix Heatmap")
+
+
+## PCA visualization of predictors
+pca <- prcomp(training_set[, -ncol(training_set)], center = TRUE, scale. = TRUE)
+pca_df <- data.frame(pca$x[, 1:2], classe = training_set$classe)
+
+ggplot(pca_df, aes(PC1, PC2, color = classe)) +
+  geom_point(alpha = 0.5) +
+  ggtitle("PCA of Training Predictors")
