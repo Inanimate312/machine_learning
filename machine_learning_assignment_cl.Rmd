@@ -1,0 +1,144 @@
+---
+title: 'Machine Learning: Prediction Models in Human Activity Recognition Data'
+author: "Chris Luchterhand"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+## Executive Summary
+This analysis uses machine learning to build a predictive algorithm that predicts the type of unilateral dumbell bicep curl performed (the "class") based on other indicators, using the Human Activity Recognition (HAR) dataset. The HAR data contains data collected from six participants who wore accelerometers on their belt, forearm, arm, and dumbell while performing unilateral dumbell bicep curls. Classes include: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E) (Velloso et al).
+
+We construct a cross-validated random forest algorithm to predict the class of bicep curl based on other indicators in the dataset. The out-of-sample error rate of the algorithm is approximately 0.76%. We apply this model to 20 test cases and plot several visualizations that illustrate the model's predictive power.
+
+## Data Processing
+We first load the HAR training and testing data. We retain only variables with at least 95% non-missing values. Additionally, we remove seven non-predictive columns that include row number, user names, timestamps, and several window indicators used in data collection. These columns do not contribute to the prediction.
+
+```{r setup, echo=FALSE}
+# Initialize
+set.seed(54321)
+library(caret)
+library(randomForest)
+
+# Download and read in data
+training_url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testing_url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+download.file(training_url, 
+              destfile = "pml-training.csv", 
+              mode = "wb")
+
+download.file(testing_url, 
+              destfile = "pml-testing.csv", 
+              mode = "wb")
+
+training_raw <- read.csv("pml-training.csv", 
+                         na.strings = c("NA","","#DIV/0!"))
+
+testing_raw <- read.csv("pml-testing.csv", 
+                        na.strings = c("NA","","#DIV/0!"))
+
+# Remove non-predictive columns
+drop_columns <- c("X",
+                  "user_name",
+                  "raw_timestamp_part_1",
+                  "raw_timestamp_part_2",
+                  "cvtd_timestamp",
+                  "new_window",
+                  "num_window")
+
+training <- training_raw[, !(names(training_raw) %in% drop_columns)]
+testing <- testing_raw[, !(names(testing_raw) %in% drop_columns)]
+
+
+# Remove columns with mostly NA values
+na_fraction <- colSums(is.na(training)) / nrow(training)
+keep_names <- names(training)[na_fraction < 0.95]
+keep_names <- intersect(keep_names, names(testing))
+
+training <- training[, keep_names]
+testing <- testing[, keep_names]
+
+# Restore the outcome variable "classe" to the training set
+training$classe <- factor(training_raw$classe)
+```
+
+## Random Forest Model Construction
+The HAR data is already split into training and testing datasets. We further split the training data into training and validation sets using a 70/30 split: 70% of observations are placed in the training set and the remaining 30% in the validation set. We then fit a 500-tree random forest model on the training subset, using 5-fold cross-validation (i.e., resampling five times). We evaluate the model on the validation set to determine the out-of-sample error rate of approximately 0.76%. After cross-validation, we refit the random forest model on the full training dataset. See Figures 1-2 and the Appendix for plots of variable importance and the confusion matrix of the model.
+
+```{r rf, echo=FALSE}
+# Split training into training and validation (to estimate OOS error)
+set.seed(54321)
+inTraining <- createDataPartition(training$classe, p = 0.7, list = FALSE)
+
+training_set <- training[inTraining, ]
+validation_set <- training[-inTraining, ]
+
+# Build cross-validated random forest model
+control <- trainControl(method = "cv", number = 5)
+
+set.seed(54321)
+rf_fit <- train(classe ~., 
+                data = training_set, 
+                method = "rf",
+                trControl = control,
+                ntree = 500,
+                importance = TRUE)
+
+# Evaluate on validation set
+validation_predictions <- predict(rf_fit, newdata = validation_set)
+cm <- confusionMatrix(validation_predictions, validation_set$classe)
+oos_error <- 1 - cm$overall["Accuracy"]
+oos_error
+
+# Refit on the full training data
+set.seed(54321)
+rf_final <- train(classe ~.,
+                  data = training,
+                  method = "rf",
+                  trControl = control,
+                  ntree = 500,
+                  importance = TRUE)
+```
+
+## Prediction
+We use the random forest model to predict class on 20 test cases (the cleaned testing dataset produced in the data processing step above). The prediction results are included below:
+
+```{r predict, echo=TRUE}
+# Predict on test data
+test_predictions <- predict(rf_final, newdata = testing)
+test_predictions
+```
+
+In conclusion, the low out-of-sample error rate and the confusion matrix indicate that this model performs quite well.
+
+## References
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013. Read more: http:/groupware.les.inf.puc-rio.br/har#ixzz4TjuiiqJs
+
+## Appendices
+```{r varimportance, echo=FALSE}
+## Variable importance plot
+plot(varImp(rf_fit), top = 20, main = "Figure 1. Top 20 Important Predictors")
+```
+Figure 1 plots the top predictors ranked by their contribution to the random forest model. This figure illustrates that importance is spread across a number of predictors, especially for classes C and E. That is, the exercise class largely depends on a combination of sensor inputs as opposed to only a small number of influential inputs.
+
+```{r confusion, echo=FALSE}
+library(ggplot2)
+
+cm_df <- as.data.frame(cm$table)
+ggplot(cm_df, aes(Prediction, Reference, fill = Freq)) +
+  geom_tile() +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  ggtitle("Figure 2. Confusion Matrix Heatmap")
+```
+Figure 2 displays the confusion matrix of the random forest model. This matrix indicates that the model performs quite well, especially for exercise class A. The darker shaded squares in the matrix indicate many observations where the predicted class aligns with the reference class.
+
+```{r pca, echo=FALSE}
+## PCA visualization of predictors
+pca <- prcomp(training_set[, -ncol(training_set)], center = TRUE, scale. = TRUE)
+pca_df <- data.frame(pca$x[, 1:2], classe = training_set$classe)
+
+ggplot(pca_df, aes(PC1, PC2, color = classe)) +
+  geom_point(alpha = 0.5) +
+  ggtitle("Figure 3. PCA of Training Predictors")
+```
+Figure 3 displays the principal component analysis of the class predictors, including the first two principal components. Each observation is colored by exercise class. As Figure 3 indicates, the classes appear to form distinct clusters, which suggests that the underlying data contains separable patterns.
